@@ -1,0 +1,12 @@
+{
+  "domain": "simplex",
+  "name": "SimpleX",
+  "version": "0.1.0",
+  "documentation": "https://github.com/jooray/ha-simplex",
+  "requirements": ["aiohttp>=3.9.0"],
+  "codeowners": ["@jooray"],
+  "iot_class": "local_push",
+  "integration_type": "hub",
+  "config_flow": true,
+  "loggers": ["simplex"]
+}
