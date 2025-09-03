@@ -7,14 +7,15 @@ Custom [Home Assistant](https://www.home-assistant.io/) integration for sending 
 This integration lets you:
 
 - Connect Home Assistant to a running `simplex-chat` CLI instance in **WebSocket mode** (`simplex-chat -p 5225`).
-- Accept **invite links** (1:1 or group) and bind them to friendly aliases (e.g., `wife`, `family`, `reader`).
-- Send messages via Home Assistant’s `notify` service:
+- Accept **invite links** (1:1 or group) and create individual notify entities for each contact/group.
+- Send messages via modern Home Assistant notify entities:
   ```yaml
-  service: notify.simplex
+  action: notify.send_message
   data:
-    message: "Dinner is ready"
-    data:
-      target: "family"  # alias you configured in options
+    message: "Dinner is ready!"
+    title: "Home Alert"
+  target:
+    entity_id: notify.simplex_family
   ```
 
 * Use [Assist](https://www.home-assistant.io/voice_control/assist/) with the LLM tool `send_simplex_message`:
@@ -23,11 +24,12 @@ This integration lets you:
 
 ## Features
 
-* ✅ Paste invite link (1:1 or group) to create a target alias
-* ✅ Persistent storage of aliases → chat IDs in HA config
-* ✅ `notify.simplex` service for automations and scripts
-* ✅ Assist LLM tool (`send_simplex_message`)
-* ✅ Works with both personal and group chats
+* ✅ **Individual notify entities** for each contact/group (e.g., `notify.simplex_alice`, `notify.simplex_family`)
+* ✅ **Simple invite flow** - paste link to create new entity
+* ✅ **Entity-based targeting** - send to specific contacts or multiple at once
+* ✅ **Standard HA entity management** - delete contacts via Entities page
+* ✅ **Assist LLM tool** (`send_simplex_message`) for voice commands
+* ✅ **Works with both personal and group chats**
 * ⚠️ Currently **does not** generate invites from HA (only accepts links)
 
 ---
@@ -55,68 +57,83 @@ Restart Home Assistant.
 * Search for **SimpleX**
 * Enter the WebSocket URL (default: `ws://127.0.0.1:5225`)
 
-### 4. Add aliases
+### 4. Add contacts/groups
 
 * Open the SimpleX integration card → **Configure**
-* For each target:
-
-  * **Alias**: e.g. `wife`, `family`
-  * **Invite link**: paste from your SimpleX app (can be group or 1:1 link)
+* Choose **Add New Chat/Contact**
+* Enter a friendly name (e.g., `Alice`, `Family Group`)
+* Paste the invite link from your SimpleX app
+* A new notify entity will be created (e.g., `notify.simplex_alice`)
 
 ---
 
-## Usage
+## Testing Notifications
 
-### Notify service
+The integration creates individual notify entities for each configured alias. This allows you to send messages to specific contacts or groups.
+
+### Entity Names
+
+- If you have aliases configured, each will get its own entity: `notify.simplex_alice`, `notify.simplex_bob`, etc.
+- If no aliases are configured, a single `notify.simplex` entity is created that broadcasts to all future aliases
+
+### Testing in Developer Tools
+
+1. **Go to Developer Tools → Actions**
+2. **Select the `notify.send_message` action**
+3. **Target a specific alias entity:**
 
 ```yaml
-service: notify.simplex
+action: notify.send_message
 data:
-  message: "Coffee is ready ☕"
-  data:
-    # recipient alias; you can also use recipient:/alias:/aliases:/recipients:
-    target: "reader"
-
-# multiple recipients
-service: notify.simplex
-data:
-  message: "Hello group"
-  data:
-    aliases: ["family", "friends"]
+  message: "Hello from Home Assistant!"
+  title: "Test Message"
+target:
+  entity_id: notify.simplex_macbook
 ```
 
-### Voice (Assist LLM)
+Or send to multiple aliases at once:
 
-Say:
+```yaml
+action: notify.send_message  
+data:
+  message: "Broadcast message"
+  title: "Alert"
+target:
+  entity_id:
+    - notify.simplex_alice
+    - notify.simplex_bob
+```
 
-> “Send my **family** ‘I’m leaving now.’”
+### Using in Automations
 
-Assist will call the tool `send_simplex_message` with `{ recipient: "family", text: "I’m leaving now" }`.
+```yaml
+automation:
+  - alias: "Security Alert"
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.door_sensor
+        to: "on"
+    action:
+      - action: notify.send_message
+        data:
+          message: "Front door opened!"
+          title: "Security Alert"
+        target:
+          entity_id: notify.simplex_security_group
+```
 
-If Assist says the tool is not available, make sure:
+### Troubleshooting
 
-- You're on HA 2024.8+ (LLM API tools support).
-- The integration is loaded without errors (check Settings → System → Logs).
-- You have at least one alias configured in the integration options.
-- After adding or renaming aliases, reload the integration so the tool list refreshes.
+If notifications aren't working:
 
----
+1. **Check entity availability:** Go to **Developer Tools → States** and look for your `notify.simplex_*` entities
+2. **Verify aliases:** Check the configuration options to ensure aliases are properly set up
+3. **Check logs:** Look for errors in **Settings → System → Logs** or enable debug logging:
 
-## Development status
+```yaml
+logger:
+  logs:
+    custom_components.simplex: debug
+```
 
-⚠️ **Experimental** — this is an early version.
-Expect breaking changes while the SimpleX CLI bot API stabilizes.
-
-
----
-
-## Credits
-
-* [SimpleX Chat](https://github.com/simplex-chat/simplex-chat) for the CLI & WS API
-* Inspired by other HA notify integrations (`telegram`, `matrix`, `ntfy`…)
-
----
-
-## License
-
-MIT License
+4. **WebSocket connection:** Ensure your SimpleX chat is running and the WebSocket connection is active

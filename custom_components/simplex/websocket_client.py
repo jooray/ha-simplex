@@ -88,42 +88,65 @@ class SimplexWsClient:
             if len(parts) == 2 and len(parts[1]) > 20:
                 link = parts[1]
                 safe_cmd = parts[0] + " " + f"{link[:8]}…<redacted>…{link[-6:]}"
+        _LOGGER.debug("_rpc_cmd: start cmd=%s corr=%s timeout=%.1fs", safe_cmd, corr, timeout)
         _LOGGER.debug("WS -> %s", {"corrId": corr, "cmd": safe_cmd})
         await self._ws.send_str(json.dumps(payload))
 
         try:
             # Wait either for direct response or for immediate error event without corrId
-            resp_task = asyncio.create_task(asyncio.wait_for(fut, timeout))
-            # Only briefly watch for an early error event to avoid starving the main wait
-            event_task = asyncio.create_task(asyncio.wait_for(self._events.get(), timeout=timeout))
-            done, pending = await asyncio.wait({resp_task, event_task}, return_when=asyncio.FIRST_COMPLETED)
-            for p in pending:
-                p.cancel()
-            result: Dict[str, Any]
-            if resp_task in done:
-                result = resp_task.result()
-            else:
-                # Got an event first
-                evt = event_task.result()
-                if evt is not None and not isinstance(evt, dict):
-                    evt = {}
-                # If it's an error event, raise it; otherwise re-queue it for other consumers
-                resp = evt.get("resp") if isinstance(evt, dict) else None
-                if isinstance(resp, dict) and resp.get("type") == "chatCmdError":
-                    raise self._convert_chat_cmd_error(resp)
-                # Not an error – put it back and continue waiting for corrId response
-                if isinstance(evt, dict) and evt:
-                    await self._events.put(evt)
-                result = await asyncio.wait_for(fut, timeout)
+            _LOGGER.debug("_rpc_cmd: waiting for response or early error event, timeout=%.1fs", timeout)
+
+            # Simple approach: just wait for the correlated response, handle async events separately
+            while True:
+                try:
+                    result = await asyncio.wait_for(fut, timeout)
+                    _LOGGER.debug("_rpc_cmd: got response for corr=%s", corr)
+                    break
+                except asyncio.TimeoutError:
+                    # Check if we got any async events that might be errors
+                    try:
+                        evt = self._events.get_nowait()
+                        resp = evt.get("resp") if isinstance(evt, dict) else None
+                        if isinstance(resp, dict) and resp.get("type") == "chatCmdError":
+                            _LOGGER.debug("_rpc_cmd: found async chatCmdError during timeout, raising")
+                            raise self._convert_chat_cmd_error(resp)
+                        # Not an error event, put it back
+                        await self._events.put(evt)
+                        _LOGGER.debug("_rpc_cmd: re-queued unrelated async event during wait")
+                    except asyncio.QueueEmpty:
+                        pass
+                    # Re-raise the timeout
+                    raise
         except asyncio.TimeoutError as exc:
+            _LOGGER.debug("_rpc_cmd: timeout after %.1fs for corr=%s", timeout, corr)
             raise SimplexWsTimeoutError("WebSocket RPC timed out", payload={"cmd": cmd}) from exc
+        except asyncio.CancelledError:
+            _LOGGER.debug("_rpc_cmd: cancelled for corr=%s", corr)
+            # Clean up pending future
+            self._pending.pop(corr, None)
+            raise
+        except ConnectionError as exc:
+            _LOGGER.debug("_rpc_cmd: connection error for corr=%s: %s", corr, exc)
+            self._pending.pop(corr, None)
+            raise SimplexWsError(f"WebSocket connection error: {exc}", reason="connection_error", payload={"cmd": cmd}) from exc
+        except json.JSONDecodeError as exc:
+            _LOGGER.debug("_rpc_cmd: JSON decode error for corr=%s: %s", corr, exc)
+            self._pending.pop(corr, None)
+            raise SimplexWsError(f"Invalid JSON response: {exc}", reason="json_error", payload={"cmd": cmd}) from exc
+        except Exception as exc:
+            _LOGGER.exception("_rpc_cmd: unexpected error for corr=%s", corr)
+            self._pending.pop(corr, None)
+            raise SimplexWsError(f"Unexpected RPC error: {exc}", reason="unknown_error", payload={"cmd": cmd}) from exc
 
         _LOGGER.debug("WS <- %s", result)
         resp = result.get("resp") if isinstance(result, dict) else None
         if not isinstance(resp, dict):
+            _LOGGER.debug("_rpc_cmd: returning raw result for corr=%s", corr)
             return result
         if resp.get("type") == "chatCmdError":
+            _LOGGER.debug("_rpc_cmd: response is chatCmdError for corr=%s, raising", corr)
             raise self._convert_chat_cmd_error(resp)
+        _LOGGER.debug("_rpc_cmd: success for corr=%s, response_type=%s", corr, resp.get("type"))
         return resp
 
     def _convert_chat_cmd_error(self, resp: Dict[str, Any]) -> SimplexWsError:
@@ -159,8 +182,19 @@ class SimplexWsClient:
         Returns: { "chat_ref": "@<contactId>"|"#<groupId>", "initial": {...}, "event": {...}? }
         Raises SimplexWsError on immediate command errors, and SimplexWsTimeoutError on timeout.
         """
+        # Redact sensitive parts of the link for logs
+        def _safe_link_for_log(l: str) -> str:
+            try:
+                if len(l) > 20:
+                    return f"{l[:8]}…<redacted>…{l[-6:]}"
+                return "…<redacted>"
+            except Exception:
+                return "…<redacted>"
+
+        _LOGGER.debug("accept_invite_link: start link=%s timeout=%.1fs", _safe_link_for_log(link), timeout)
         # Kick off connection via active user profile
         initial = await self._rpc_cmd(f"/connect {link}", timeout=timeout)
+        _LOGGER.debug("accept_invite_link: initial response type=%s payload=%s", initial.get("type"), initial)
 
         # If contact already exists, response should include contact details
         chat_ref: Optional[str] = None
@@ -169,6 +203,7 @@ class SimplexWsClient:
             cid = contact.get("contactId")
             if cid is not None:
                 chat_ref = f"@{cid}"
+                _LOGGER.debug("accept_invite_link: contact already exists, chat_ref=%s", chat_ref)
                 return {"chat_ref": chat_ref, "initial": initial}
 
         # Otherwise, wait for relevant event indicating chat is usable
@@ -179,19 +214,28 @@ class SimplexWsClient:
             "contactSndReady",   # invitation confirmed, can send
             "userJoinedGroup",   # joined group via link
         }
+        events_seen = 0
+        last_type: Optional[str] = None
         while self._loop.time() < deadline:
             remaining = max(0.1, deadline - self._loop.time())
             try:
                 msg = await asyncio.wait_for(self._events.get(), timeout=remaining)
             except asyncio.TimeoutError:
+                _LOGGER.debug("accept_invite_link: wait_for event timed out after %.2fs, events_seen=%d", remaining, events_seen)
                 break
             resp = msg.get("resp") if isinstance(msg, dict) else None
             if not isinstance(resp, dict):
+                _LOGGER.debug("accept_invite_link: ignoring non-dict event: %s", msg)
                 continue
             etype = resp.get("type")
+            last_type = etype
+            events_seen += 1
+            _LOGGER.debug("accept_invite_link: event #%d type=%s payload=%s", events_seen, etype, resp)
             if etype == "chatCmdError":
+                _LOGGER.debug("accept_invite_link: received chatCmdError, raising")
                 raise self._convert_chat_cmd_error(resp)
             if etype not in wanted:
+                _LOGGER.debug("accept_invite_link: event not in wanted set, continue")
                 continue
             event = resp
             if etype in ("contactConnected", "contactSndReady"):
@@ -199,16 +243,23 @@ class SimplexWsClient:
                 cid = contact.get("contactId")
                 if cid is not None:
                     chat_ref = f"@{cid}"
+                    _LOGGER.debug("accept_invite_link: ready via %s, chat_ref=%s", etype, chat_ref)
                     break
             if etype == "userJoinedGroup":
                 group = resp.get("groupInfo") or {}
                 gid = group.get("groupId")
                 if gid is not None:
                     chat_ref = f"#{gid}"
+                    _LOGGER.debug("accept_invite_link: joined group, chat_ref=%s", chat_ref)
                     break
 
         if not chat_ref:
+            _LOGGER.debug(
+                "accept_invite_link: no chat_ref before timeout; initial_type=%s last_event_type=%s events_seen=%d initial=%s last_event=%s",
+                initial.get("type"), last_type, events_seen, initial, event,
+            )
             raise SimplexWsTimeoutError("Invite was not ready in time", payload={"initial": initial, "event": event})
+        _LOGGER.debug("accept_invite_link: success chat_ref=%s", chat_ref)
         return {"chat_ref": chat_ref, "initial": initial, "event": event}
 
     async def send_text(self, chat_ref: str, text: str) -> Dict[str, Any]:

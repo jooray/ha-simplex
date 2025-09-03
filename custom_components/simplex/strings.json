@@ -17,21 +17,24 @@
   },
   "options": {
     "step": {
-      "add_target": {
-        "title": "Add a recipient alias",
-  "description": "Paste an invite link from a SimpleX app (1:1 or group), and bind it to an alias.\n\nWS URL: {ws_url}\nIf it fails: ensure the SimpleX CLI is running with WebSocket enabled and the link is fresh (not expired).\nLast error: {last_error}",
+      "init": {
+        "title": "Add New Chat or Contact",
+        "description": "Create a new SimpleX alias connection.\n\n1. Open SimpleX Chat app\n2. Create/share an invite link\n3. Paste the link below with a friendly name\n\nNote: You can view and manage existing entities in Settings → Devices & Services → Entities.",
         "data": {
-          "alias": "Alias (e.g., wife, family, reader)",
-          "invite_link": "Invite link"
+          "alias": "Friendly name (e.g., Alice, Family Group, Security)",
+          "invite_link": "SimpleX invite link"
         }
       }
     },
     "error": {
-  "invite_failed": "Could not accept the invite link.",
-  "invite_invalid": "This invite link looks invalid. Please paste a fresh link.",
-  "invite_expired": "This invite link has expired or was revoked. Generate a new one.",
-  "invite_timeout": "Timed out waiting for SimpleX to respond. Ensure the SimpleX CLI WebSocket is running and reachable.",
-  "ws_not_connected": "The WebSocket is not connected. Check the connection in the integration settings."
+      "required": "This field is required.",
+      "invite_failed": "Could not accept the invite link.",
+      "invite_invalid": "This invite link looks invalid. Please paste a fresh link.",
+      "invite_expired": "This invite link has expired or was revoked. Generate a new one.",
+      "invite_timeout": "Timed out waiting for SimpleX to respond. Ensure the SimpleX CLI WebSocket is running and reachable.",
+      "ws_not_connected": "The WebSocket is not connected. Check the connection in the integration settings.",
+  "alias_exists": "This alias already exists. Please choose a different name.",
+  "unknown": "Unknown error occurred. Please check the logs for details."
     }
   }
 }
