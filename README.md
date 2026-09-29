@@ -4,6 +4,20 @@
 
 Custom [Home Assistant](https://www.home-assistant.io/) integration for sending messages through [SimpleX Chat](https://simplex.chat/).
 
+<!-- jooray-links:start -->
+### More from me
+
+**Related projects**
+
+- [simplex-ws-docker](https://github.com/jooray/simplex-ws-docker): Docker image for the SimpleX chat WebSocket bot interface
+- [signal-monitoring](https://github.com/jooray/signal-monitoring): server monitoring with signal-cli notifications
+- [simple-signal-rest-send](https://github.com/jooray/simple-signal-rest-send): a simple REST API for sending Signal notifications
+
+**Full project showcase:** [SimpleX for Home Assistant in my project showcase](https://juraj.bednar.io/showcase/#MSG-04), or [all my projects](https://juraj.bednar.io/showcase/).
+
+I write about building things on [my blog](https://juraj.bednar.io/en/blog-en/). I also wrote a cypherpunk novel, [Tamers of Entropy](https://tamersofentropy.net/), and there is a [trailer](https://tamersofentropy.net/#trailer).
+<!-- jooray-links:end -->
+
 This integration lets you:
 
 - Connect Home Assistant to a running `simplex-chat` CLI instance in **WebSocket mode** (`simplex-chat -p 5225`).
