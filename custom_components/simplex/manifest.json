@@ -12,8 +12,6 @@
   "loggers": [
     "simplex"
   ],
-  "requirements": [
-    "aiohttp>=3.9.0"
-  ],
+  "requirements": [],
   "version": "0.1.1"
 }
