@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
+import aiohttp
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.exceptions import ConfigEntryNotReady
 
 from .const import DOMAIN, CONF_WS_URL, CONF_TARGETS, PLATFORMS, DEFAULT_WS_URL
 from .websocket_client import SimplexWsClient
@@ -21,7 +24,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                      entry.entry_id, ws_url, len(targets), list(targets.keys()))
 
         client = SimplexWsClient(ws_url, hass.loop)
-        await client.connect()
+        try:
+            await client.connect()
+        except (OSError, aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            await client.close()
+            raise ConfigEntryNotReady(
+                f"Cannot connect to the SimpleX websocket at {ws_url}: {exc}"
+            ) from exc
 
         hass.data.setdefault(DOMAIN, {})
         hass.data[DOMAIN][entry.entry_id] = {
@@ -38,6 +47,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entry.async_on_unload(unregister_llm)
         _LOGGER.info("SimpleX entry %s setup completed successfully", entry.entry_id)
         return True
+    except ConfigEntryNotReady:
+        # Let Home Assistant retry the entry with its own backoff.
+        raise
     except Exception as exc:
         _LOGGER.exception("Failed to setup SimpleX entry %s: %s", entry.entry_id, exc)
         # Clean up on failure
